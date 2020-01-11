@@ -37,6 +37,7 @@ import matplotlib.pyplot as plt
 from bert import BertModelLayer
 import tensorflow.keras as keras
 from tensorflow.keras.layers import Conv1D
+from sklearn.preprocessing import MultiLabelBinarizer
 from tensorflow.keras.layers import RepeatVector, Permute, Embedding
 
 # !wget ftp://ftp.cs.huji.ac.il/users/nadavb/cafa_4_partial_dataset/protein_tokens.h5 -O ~/protein_tokens.h5
@@ -146,19 +147,13 @@ print('%d of %d sequences are of right length.' % (len(seq_tokens), len(padded_s
 print(padded_seq_tokens.shape)
 
 
+y_padded = np.array([pad_tokens(tokens) for tokens in y])
 
-mask = np.ones_like(padded_seq_tokens, dtype = bool).flatten()
-mask[:int(MASK_OUT_FREQ * mask.size)] = False
-np.random.shuffle(mask)
-mask = mask.reshape(padded_seq_tokens.shape)
-masked_dataset_tokens = np.where(mask, padded_seq_tokens, MASK_TOKEN)
-print(masked_dataset_tokens)
-
-
-# model
 
 if MODEL == 'BERT':
     l_input_ids = keras.layers.Input(shape=(MAX_LEN,), dtype=np.int32)
+    # l_token_type_ids = keras.layers.Input(shape=(MAX_LEN,), dtype=np.int32)
+
     l_bert = BertModelLayer(**BertModelLayer.Params(
 
         # embedding params
@@ -187,16 +182,24 @@ if MODEL == 'BERT':
         name                     = "bert",
     ))
     bert_output = l_bert(l_input_ids)
-    token_guess_output = keras.layers.Dense(VOCAB_SIZE, activation = 'softmax', name = 'token_guess')(bert_output)
+
+    # bert_output = l_bert([l_input_ids, l_token_type_ids])
+    token_guess_output = keras.layers.Dense(VOCAB_SIZE, activation='softmax', name='token_guess')(bert_output)
     l_bert.trainable = True
+    # model = keras.Model(inputs=[l_input_ids, l_token_type_ids], outputs=bert_output)
+    # model.build(input_shape=[(None, MAX_LEN), (None, MAX_LEN)])
+    model = keras.Model(inputs=[l_input_ids], outputs=bert_output)
+    model.build(input_shape=[(None, MAX_LEN)])
+
 
 elif MODEL == 'EMBEDDING':
     l_input_ids = keras.layers.Input(shape = (MAX_LEN,), dtype = np.int32)
     l_input_ids2 = Embedding(VOCAB_SIZE, VOCAB_SIZE)(l_input_ids)
     token_guess_output = l_input_ids2
+    model = keras.Model(inputs = l_input_ids, outputs = token_guess_output)
+    model.build(input_shape = (None, MAX_LEN))
 
-model = keras.Model(inputs = l_input_ids, outputs = token_guess_output)
-model.build(input_shape = (None, MAX_LEN))
+
 
 print(model.summary())
 
@@ -210,13 +213,23 @@ gpu_model.compile(optimizer=optimizer, loss='sparse_categorical_crossentropy')
 # fit
 
 for i in range(N_EPOCHS):
+
     print('Epoch %d:' % (i + 1))
+    mask = np.ones_like(padded_seq_tokens, dtype=bool).flatten()
+    mask[:int(MASK_OUT_FREQ * mask.size)] = False
+    np.random.shuffle(mask)
+    mask = mask.reshape(padded_seq_tokens.shape)
+    masked_dataset_tokens = np.where(mask, padded_seq_tokens, MASK_TOKEN)
+    print(masked_dataset_tokens)
+
     if EPOCH_SIZE is None: epoch_mask = np.arange(len(padded_seq_tokens))
     else: epoch_mask = np.random.randint(0, len(padded_seq_tokens), EPOCH_SIZE)
     epoch_X = masked_dataset_tokens[epoch_mask, :]
     epoch_Y = padded_seq_tokens[epoch_mask, :]
+    # epoch_label = y_padded[epoch_mask, :]
     print(epoch_X.shape)
     print(epoch_Y.shape)
+    # print(epoch_label.shape)
     gpu_model.fit(epoch_X, epoch_Y, batch_size = BATCH_SIZE)
     if i % N_EPOCHS_PER_SAVE == 0:
         gpu_model.save_weights(WEIGHTS_FILE)
