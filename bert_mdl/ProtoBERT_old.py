@@ -1,10 +1,8 @@
 #!/usr/bin/env python
 
 import os
-import gc
 import json
 import pickle
-import traceback
 from itertools import islice
 
 import numpy as np
@@ -18,19 +16,6 @@ import tensorflow as tf
 from tensorflow import keras
 import tensorflow.keras.backend as K
 from bert import BertModelLayer
-# from bert_weaponized import *
-import os
-import re
-import sqlite3
-import json
-
-import numpy as np
-import pandas as pd
-import matplotlib as plt
-
-from Bio import SeqIO
-
-from IPython.display import display
 
 
 # ----- config -----
@@ -50,9 +35,9 @@ N_SEQS_FOR_SENTENCE_PIECE_TRAINING = 1000000
 MODEL = ['BERT', 'EMBEDDING'][0]
 
 # Training
-MULTI_GPU = False
+MULTI_GPU = False 
 BATCH_SIZE = 64
-N_EPOCHS = 1 #  10000
+N_EPOCHS = 10 # 1000
 N_EPOCHS_PER_SAVE = 1 
 
 # Reserved tokens
@@ -61,7 +46,6 @@ PAD_TOKEN = VOCAB_SIZE - 1
 MASK_TOKEN = VOCAB_SIZE - 2
 
 # Paths
-DATA_DIR = '/home/user/Desktop/data/'
 MODEL_WEIGHTS_FILE = '/home/user/Desktop/protobret_weights.h5'
 SP_TRAINING_CORPUS_TXT_FILE_PATH = '/home/user/Desktop/data/sentence_piece_training_corpus_tmp.txt'
 DATA_DUMP_DIR = '/home/user/Desktop/data/dataset_dump/'
@@ -69,21 +53,11 @@ DATA_DUMP_DIR = '/home/user/Desktop/data/dataset_dump/'
 if ALL_DATA:
     # wget ftp://ftp.uniprot.org/pub/databases/uniprot/uniref/uniref90/uniref90.fasta.gz
     INPUT_FASTA_FILE_PATH = '/home/user/Downloads/uniref90.fasta'
-    # INPUT_FASTA_FILE_PATH = os.path.join(DATA_DIR, 'uniref90.fasta')
-
     # wget ftp://ftp.cs.huji.ac.il/users/nadavb/cafa4_data/protein_annotations.db.gz
-    # wget ftp://ftp.cs.huji.ac.il/users/nadavb/cafa4_data/target_seqs.csv
-    ANNOTATIONS_SQLITE_FILE_PATH = os.path.join(DATA_DIR, 'protein_annotations.db')
-    # ANNOTATIONS_SQLITE_FILE_PATH = '/home/user/Downloads/protein_annotations.db'
+    ANNOTATIONS_SQLITE_FILE_PATH = '/home/user/Downloads/protein_annotations.db'
 else:
-    INPUT_FASTA_FILE_PATH = os.path.join(DATA_DIR, 'uniref90_sample.fasta')
-    # INPUT_FASTA_FILE_PATH = '/home/user/Desktop/data/uniref90_sample.fasta'
-
-    ANNOTATIONS_SQLITE_FILE_PATH = os.path.join(DATA_DIR, 'protein_annotations_sample.db')
-    # ANNOTATIONS_SQLITE_FILE_PATH = '/home/user/Desktop/protein_annotations_sample.db'
-
-GO_ANNOTATIONS = os.path.join(DATA_DIR, 'go_annotations.csv')
-TARGET_SEQS = os.path.join(DATA_DIR, 'target_seqs.csv')
+    INPUT_FASTA_FILE_PATH = '/home/user/Desktop/data/uniref90_sample.fasta'
+    ANNOTATIONS_SQLITE_FILE_PATH = '/home/user/Desktop/protein_annotations_sample.db'
 
 # ----- config -----
 
@@ -201,8 +175,8 @@ def train_sp(seqs):
     
     # TODO: check what --hard_vocab_limit=false actually does
     # TODO Don't forget to comment-in!!!
-    # spm.SentencePieceTrainer.Train('--input=%s --model_prefix=protopiece --vocab_size=%d --hard_vocab_limit=false' % \
-    #         (SP_TRAINING_CORPUS_TXT_FILE_PATH,         VOCAB_SIZE - N_RESERVED_SYMBOLS))
+    #spm.SentencePieceTrainer.Train('--input=%s --model_prefix=protopiece --vocab_size=%d --hard_vocab_limit=false' % \
+    #        (SP_TRAINING_CORPUS_TXT_FILE_PATH,         VOCAB_SIZE - N_RESERVED_SYMBOLS))
     sp = spm.SentencePieceProcessor()
     sp.load('protopiece.model')
     return sp
@@ -245,11 +219,9 @@ def create_bert_model(annotation_dim):
         # transformer encoder params
         num_heads                = 4,
         num_layers               = 4,
-        # hidden_size              = 768,
-        hidden_size              = 32,
+        hidden_size              = 768,
         hidden_dropout           = 0.1,
-        # intermediate_size        = 2 * 512,
-        intermediate_size      = 32,
+        intermediate_size        = 2 * 512,
         intermediate_activation  = "gelu",
 
         # see arXiv:1902.00751 (adapter-BERT)
@@ -276,9 +248,7 @@ def create_bert_model(annotation_dim):
     output_seqs = keras.layers.Dense(VOCAB_SIZE, activation = 'softmax', name = 'output_seqs')(hidden)
     output_annotations_per_position = keras.layers.Dense(annotation_dim, activation = 'sigmoid', name = 'output_annotations_per_position')(hidden)
     output_annotations = K.mean(output_annotations_per_position, axis = 1)
-
-    output_annotations = keras.layers.Lambda(lambda x: x, name="output_annotations")(output_annotations)
-
+    
     model = keras.Model(inputs = [input_seq_ids, input_annotations], outputs = [output_seqs, output_annotations])
     return model
     
@@ -291,31 +261,7 @@ def create_model(annotation_dim):
         return create_bert_model(annotation_dim)
     elif MODEL == 'EMBEDDING':
         return create_embedding_model()
-
-def binary_PFA(y_true, y_pred, threshold=K.variable(value=0.5)):
-    y_pred = K.cast(y_pred >= threshold, 'float32')
-    # N = total number of negative labels
-    N = K.sum(1 - y_true)
-    # FP = total number of false alerts, alerts from the negative class labels
-    FP = K.sum(y_pred - y_pred * y_true)
-    return FP/N
-
-def binary_PTA(y_true, y_pred, threshold=K.variable(value=0.5)):
-    y_pred = K.cast(y_pred >= threshold, 'float32')
-    # P = total number of positive labels
-    P = K.sum(y_true)
-    # TP = total number of correct alerts, alerts from the positive class labels
-    TP = K.sum(y_pred * y_true)
-    return TP/P
-
-def binary_auc(y_true, y_pred):
-    ptas = tf.stack([binary_PTA(y_true,y_pred,k) for k in np.linspace(0, 1, 1000)],axis=0)
-    pfas = tf.stack([binary_PFA(y_true,y_pred,k) for k in np.linspace(0, 1, 1000)],axis=0)
-    pfas = tf.concat([tf.ones((1,)) ,pfas],axis=0)
-    binSizes = -(pfas[1:]-pfas[:-1])
-    s = ptas*binSizes
-    return K.sum(s, axis=0)
-
+        
 def compile_model(model):
 
     if MULTI_GPU:
@@ -323,13 +269,12 @@ def compile_model(model):
         model = multi_gpu_model(model, gpus = 4)
     
     optimizer = keras.optimizers.Adam(lr = 1e-06, amsgrad = True)
-    model.compile(optimizer = optimizer, loss = ['sparse_categorical_crossentropy', 'binary_crossentropy'], metrics={'output_annotations': binary_auc})
+    model.compile(optimizer = optimizer, loss = ['sparse_categorical_crossentropy', 'binary_crossentropy'])
     model.summary()
-    return model
-
+    
 def create_and_compile_model(annotation_dim):
     model = create_model(annotation_dim)
-    model = compile_model(model)
+    compile_model(model)
     return model
 
 def fit_model(model, encoded_tokens, encoded_annotations):
@@ -344,83 +289,38 @@ def fit_model(model, encoded_tokens, encoded_annotations):
         # Mask out the annotations.
         annotation_mask = get_random_mask(encoded_annotations.shape, MASK_OUT_FREQ)
         masked_annotations = np.where(annotation_mask, encoded_annotations, 0)
-        print(encoded_annotations[0])
-        print(encoded_tokens[0])
-        model.fit([masked_tokens, masked_annotations], [encoded_tokens, encoded_annotations], batch_size = BATCH_SIZE )
+        
+        model.fit([masked_tokens, masked_annotations], [encoded_tokens, encoded_annotations], batch_size = BATCH_SIZE)
         
         if i % N_EPOCHS_PER_SAVE == 0:
             model.save_weights(MODEL_WEIGHTS_FILE)
-    return model
+            
+def display_model_result(model, encoded_tokens, encoded_annotations, i = 0):
+    
+    record_encoded_tokens = encoded_tokens[i, :]
+    record_ecnoded_annotations = encoded_annotations[i, :]
+    
+    record_seq_mask = get_random_mask(record_encoded_tokens.shape, MASK_OUT_FREQ)
+    record_masked_tokens = np.where(record_seq_mask, record_encoded_tokens, MASK_TOKEN)
+    
+    record_annotation_mask = get_random_mask(record_ecnoded_annotations.shape, MASK_OUT_FREQ)
+    record_masked_annotations = np.where(record_annotation_mask, record_ecnoded_annotations, 0)
 
-def create_submission_files(prediction_model, output_dir, target_seqs, go_annotations_meta, model_id=1):
-    '''
-    prediction model is expected to be a function that takes two arguments (seq and annotations) and returns the final,
-    refined annotations. The protein seq is expected as a simple string of aa letters. The input annotations is expected
-    as a list of integers, as provided in the SQLITE DB. The output annotations is expected as a dictionary, mapping each
-    annotation integer (the same indices as in the input) into a confidence score between 0 to 1.
-
-    See: https://www.biofunctionprediction.org/cafa-targets/CAFA4_rules%20_01_2020_v4.pdf
-    '''
-
-    MAX_ANNOTATIONS = 1500
-
-    OUTPUT_FILE_NAME_PATTERN = 'linialgroup_%d_%s_go.txt'
-    SUBMISSION_FILE_PREFIX = 'AUTHOR Linial' + '\n' + ('MODEL %d' % model_id) + '\n' + 'KEYWORDS machine learning.'
-
-    go_annotation_index_to_id = go_annotations_meta['id']
-
-    for idx, (tax_id, tax_target_seqs) in tqdm(enumerate(target_seqs.groupby('taxa_id'))):
-        gc.collect()
-        print('Preparing submission for tax ID %s...' % tax_id)
-        formatted_predictions = []
-
-        for _, (cafa_id, seq, raw_go_annotation_indices) in tqdm(tax_target_seqs[
-            ['cafa_id', 'seq', 'complete_go_annotation_indices']].iterrows(), total=len(tax_target_seqs), desc='Tax id: %s (%s/%s)' % (tax_id, idx, len(target_seqs.groupby('taxa_id')))):
-            go_annotation_indices = [] if pd.isnull(raw_go_annotation_indices) else json.loads(
-                raw_go_annotation_indices)
-            annotation_predictions = prediction_model(seq, go_annotation_indices)
-            top_predicted_annotations = list(sorted(annotation_predictions.items(), reverse=True))[:MAX_ANNOTATIONS]
-            top_predicted_annotations = [(annotation_index, round(score, 2)) for annotation_index, score in
-                                         top_predicted_annotations]
-            formatted_predictions.extend(
-                ['%s\t%s\t%s' % (cafa_id, go_annotation_index_to_id[annotation_index], score) for
-                 annotation_index, score in top_predicted_annotations if score > 0])
-
-        tax_submission_content = SUBMISSION_FILE_PREFIX + '\n' + '\n'.join(formatted_predictions) + '\n' + 'END'
-
-        with open(os.path.join(output_dir, OUTPUT_FILE_NAME_PATTERN % (model_id, tax_id)), 'w') as f:
-            f.write(tax_submission_content)
-        del formatted_predictions
-        gc.collect()
-
-    print('Done.')
-
-def create_prediction_model(sp, model, unique_annotations):
-    annotation_to_index = {annotation: i for i, annotation in enumerate(unique_annotations)}
-
-    def prediction_model(seq, go_annotation_indices):
-        seq_token = sp.encode_as_ids(seq)
-        # TODO: Deal with padding lengths...
-        try:
-            if len(seq_token) <= MAX_SEQ_TOKEN_LEN:
-                padded_seq_token = pad_tokens(seq_token)
-                encoded_annotations = encode_labels(go_annotation_indices, annotation_to_index, len(unique_annotations))
-
-                _, pred = model.predict([np.expand_dims(padded_seq_token, axis = 0), np.asarray(np.expand_dims(encoded_annotations, axis = 0), dtype='float32')])
-
-                pred_dict = {unique_annotations[i]: score  for i, score in enumerate(pred[0])}
-                return pred_dict
-            else:
-                return {go_annotation_index: 1.0 for go_annotation_index in go_annotation_indices}
-        except:
-            print('\n' + ('-' * 80) + '\n\nException in prediction_model! Using 1.0 as prediction \n')
-            traceback.print_exc()
-            print(('-' * 80) + '\n\n')
-            return {go_annotation_index: 1.0 for go_annotation_index in go_annotation_indices}
-
-    return prediction_model
-
-
+    # TODO: Need to refactor it
+    
+    predicted_token_ids = model.predict([masked_totken_ids.reshape(1, -1)])[0, :, :].argmax(axis = -1)
+        
+    original_formatted_tokens = []
+    predicted_formatted_tokens = []
+    
+    for original_token_id, mask_bit, predicted_token_id in zip(original_token_ids, used_mask, predicted_token_ids):
+        mask_surrounding = '' if mask_bit else '?'
+        original_formatted_token, predicted_formatted_token = pad_to_max_len(mask_surrounding +                 format_token_id(original_token_id) + mask_surrounding, format_token_id(predicted_token_id))
+        original_formatted_tokens.append(original_formatted_token)
+        predicted_formatted_tokens.append(predicted_formatted_token)
+        
+    print(' '.join(original_formatted_tokens) + '\n' + ' '.join(predicted_formatted_tokens))
+    
 def run_pipeline():
     
     #create_bert_model(291) # XXX
@@ -429,19 +329,9 @@ def run_pipeline():
             
     sp, unique_annotations, encoded_tokens, encoded_annotations = create_dataset()
     model = create_and_compile_model(len(unique_annotations))
-    model = fit_model(model, encoded_tokens, encoded_annotations)
-
-    print('about')
-    # model = unsupervised_weaponized_bert(encoded_tokens, encoded_annotations)
-    # model = train_weaponized_bert(encoded_tokens, encoded_annotations, model=None)
-
-    targets = pd.read_csv(TARGET_SEQS, index_col=0)
-    go_annots = pd.read_csv(GO_ANNOTATIONS, index_col='index')
-
-    create_submission_files(create_prediction_model(sp, model, unique_annotations), '.', targets ,go_annots, model_id=1)
-
-    # prediction_model, output_dir, target_seqs, go_annotations_meta, model_id=1
-
+    fit_model(model, encoded_tokens, encoded_annotations)
+    
+    display_model_result(i = 13)
 
 if __name__ == '__main__':
     run_pipeline()
