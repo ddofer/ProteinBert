@@ -23,7 +23,7 @@
   <component name="PropertiesComponent">
     <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
     <property name="WebServerToolWindowFactoryState" value="false" />
-    <property name="last_opened_file_path" value="$PROJECT_DIR$" />
+    <property name="last_opened_file_path" value="$PROJECT_DIR$/../dt" />
   </component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
@@ -43,7 +43,8 @@
       <workItem from="1580129913150" duration="4649000" />
       <workItem from="1580156170987" duration="4778000" />
       <workItem from="1580204443713" duration="5058000" />
-      <workItem from="1580382977809" duration="7377000" />
+      <workItem from="1580382977809" duration="9615000" />
+      <workItem from="1580738721367" duration="6242000" />
     </task>
     <servers />
   </component>
@@ -51,6 +52,10 @@
     <option name="version" value="1" />
   </component>
   <component name="WindowStateProjectService">
+    <state x="743" y="298" width="424" height="454" key="FileChooserDialogImpl" timestamp="1580739613830">
+      <screen x="0" y="0" width="1920" height="1080" />
+    </state>
+    <state x="743" y="298" width="424" height="454" key="FileChooserDialogImpl/0.0.1920.1080/3840.0.3200.1800/1920.0.1920.1080@0.0.1920.1080" timestamp="1580739613830" />
     <state x="623" y="239" width="672" height="678" key="search.everywhere.popup" timestamp="1580207163761">
       <screen x="0" y="0" width="1920" height="1080" />
     </state>

@@ -36,7 +36,7 @@ from IPython.display import display
 # ----- config -----
 
 # Data
-N_SEQS_TO_READ = None
+N_SEQS_TO_READ = 10
 MAX_N_SEQS_TO_USE_DUMP = 1e07
 ALL_DATA = True
 
@@ -148,11 +148,17 @@ def train_sp(seqs):
     sp = spm.SentencePieceProcessor()
     sp.load('protopiece.model')
     return sp
-    
+
 def create_dataset(seqs=None, annotations=None):
 
     if seqs is None or annotations is None:
         seqs, annotations = load_data()
+    try:
+        np.save('seqs.npy', np.array(seqs))
+        np.save('annotations.npy', np.array(annotations))
+    except:
+        import traceback
+        traceback.print_exc()
 
     sp = train_sp(seqs)
     seq_tokens = list(map(sp.encode_as_ids, seqs))

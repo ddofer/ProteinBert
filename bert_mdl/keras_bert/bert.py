@@ -25,7 +25,6 @@ TOKEN_CLS = '[CLS]'  # Token for classification
 TOKEN_SEP = '[SEP]'  # Token for separation
 TOKEN_MASK = '[MASK]'  # Token for masking
 
-
 def gelu_tensorflow(x):
     from tensorflow.python.ops.math_ops import erf, sqrt
     return 0.5 * x * (1.0 + erf(x / sqrt(2.0)))
@@ -210,7 +209,6 @@ def set_custom_objects():
 
 
 def get_base_dict():
-    """Get basic dictionary containing special tokens."""
     return {
         TOKEN_PAD: 0,
         TOKEN_UNK: 1,
@@ -218,16 +216,6 @@ def get_base_dict():
         TOKEN_SEP: 3,
         TOKEN_MASK: 4,
     }
-
-
-def get_token_embedding(model):
-    """Get token embedding from model.
-
-    :param model: The built model.
-    :return: The output weights of embeddings.
-    """
-    return model.get_layer('Embedding-Token').output[1]
-
 
 def gen_batch_inputs(sentence_pairs,
                      token_dict,
@@ -269,11 +257,12 @@ def gen_batch_inputs(sentence_pairs,
     token_inputs, segment_inputs, masked_inputs = [], [], []
     mlm_outputs = []
     for i in range(batch_size):
-        first, second = sentence_pairs[i][0], sentence_pairs[mapping.get(i, i)][1]
+        # first, second = sentence_pairs[i][0], sentence_pairs[mapping.get(i, i)][1]
+        first, second = sentence_pairs[0][i], sentence_pairs[1][mapping.get(i, i)]
         segment_inputs.append(([0] * (len(first) + 2) + [1] * (seq_len - (len(first) + 2)))[:seq_len])
-        tokens = [TOKEN_CLS] + first + [TOKEN_SEP] + second + [TOKEN_SEP]
+        tokens = np.concatenate(([TOKEN_CLS], first, [TOKEN_SEP], second, [TOKEN_SEP]))
         tokens = tokens[:seq_len]
-        tokens += [TOKEN_PAD] * (seq_len - len(tokens))
+        tokens = np.concatenate((tokens, [TOKEN_PAD] * (seq_len - len(tokens))))
         token_input, masked_input, mlm_output = [], [], []
         has_mask = False
         for token in tokens:
@@ -303,3 +292,15 @@ def gen_batch_inputs(sentence_pairs,
     inputs = [np.asarray(x) for x in [token_inputs, segment_inputs, masked_inputs]]
     outputs = [np.asarray(np.expand_dims(x, axis=-1)) for x in [mlm_outputs, nsp_outputs]]
     return inputs, outputs
+    """Get basic dictionary containing special tokens."""
+
+
+
+
+def get_token_embedding(model):
+    """Get token embedding from model.
+
+    :param model: The built model.
+    :return: The output weights of embeddings.
+    """
+    return model.get_layer('Embedding-Token').output[1]

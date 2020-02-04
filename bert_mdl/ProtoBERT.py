@@ -5,6 +5,7 @@ import gc
 import json
 import pickle
 import traceback
+from pmap import p_map
 from itertools import islice
 
 import numpy as np
@@ -17,8 +18,8 @@ import sentencepiece as spm
 import tensorflow as tf
 from tensorflow import keras
 import tensorflow.keras.backend as K
-from bert import BertModelLayer
-# from bert_weaponized import *
+# from bert import BertModelLayer
+from bert_weaponized import *
 import os
 import re
 import sqlite3
@@ -31,7 +32,11 @@ import matplotlib as plt
 from Bio import SeqIO
 
 from IPython.display import display
-
+TOKEN_PAD = ''  # Token for padding
+TOKEN_UNK = '[UNK]'  # Token for unknown words
+TOKEN_CLS = '[CLS]'  # Token for classification
+TOKEN_SEP = '[SEP]'  # Token for separation
+TOKEN_MASK = '[MASK]'  # Token for masking
 
 # ----- config -----
 
@@ -41,10 +46,10 @@ MAX_N_SEQS_TO_USE_DUMP = 1e07
 ALL_DATA = True
 
 # Language
-VOCAB_SIZE = 16000
+VOCAB_SIZE = 1000 # 16000
 MAX_SEQ_TOKEN_LEN = 250
 MASK_OUT_FREQ = 0.2
-N_SEQS_FOR_SENTENCE_PIECE_TRAINING = 1000000
+N_SEQS_FOR_SENTENCE_PIECE_TRAINING = 100
 
 # Model
 MODEL = ['BERT', 'EMBEDDING'][0]
@@ -193,38 +198,83 @@ def load_data_with_dump():
     else:
         return load_data()
 
+def load_all_data():
+    print('Loading all Seqs..')
+    seqs = pickle.load(open('/home/user/Desktop/seqs_all.pkl', 'rb'))
+    print('All Seqs loaded!. Len: ', len(seqs))
+    print('Loading all Annotations..')
+    annotations = pickle.load(open('/home/user/Desktop/annots_all.pkl', 'rb'))
+    print('All Annotations loaded!. Len: ', len(annotations))
+    return seqs, annotations
+
 def train_sp(seqs):
-    
+    print('Saving Corpus..')
     with open(SP_TRAINING_CORPUS_TXT_FILE_PATH, 'w') as f:
         for seq in islice(seqs, N_SEQS_FOR_SENTENCE_PIECE_TRAINING):
             f.write(str(seq) + '\n')
-    
+    print('Corpus Saved!')
+    print('Training SentencePiece...')
     # TODO: check what --hard_vocab_limit=false actually does
     # TODO Don't forget to comment-in!!!
-    # spm.SentencePieceTrainer.Train('--input=%s --model_prefix=protopiece --vocab_size=%d --hard_vocab_limit=false' % \
-    #         (SP_TRAINING_CORPUS_TXT_FILE_PATH,         VOCAB_SIZE - N_RESERVED_SYMBOLS))
+    spm.SentencePieceTrainer.Train('--input=%s --model_prefix=protopiece --vocab_size=%d --hard_vocab_limit=false' % \
+            (SP_TRAINING_CORPUS_TXT_FILE_PATH,         VOCAB_SIZE - N_RESERVED_SYMBOLS))
+    print('SentencePiece Training Done!')
     sp = spm.SentencePieceProcessor()
     sp.load('protopiece.model')
     return sp
-    
+
+def encode_data():
+    seqs, annotations = load_all_data()
+
+    #sp = train_sp(seqs)
+    print('Encoding seqs..')
+    ALL_AAS = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+    ALL_AAS += [TOKEN_PAD, TOKEN_UNK, TOKEN_CLS, TOKEN_SEP, TOKEN_MASK]
+    aa_to_index = {aa: i for i, aa in enumerate(ALL_AAS)}
+    #seq_tokens = list(map(sp.encode_as_ids, tqdm(seqs)))
+    # seq_tokens = [[aa_to_index[aa] for aa in seq] for seq in tqdm(seqs)]
+    for i, seq in tqdm(enumerate(seqs)):
+        seqs[i] = [aa_to_index[aa] for aa in seq]
+
+    return seqs, annotations
+
 def create_dataset():
     
-    seqs, annotations = load_data_with_dump()
+    global VOCAB_SIZE
 
-    sp = train_sp(seqs)
-    seq_tokens = list(map(sp.encode_as_ids, seqs))
-    padded_seq_tokens = np.array([pad_tokens(tokens) for tokens in seq_tokens if len(tokens) <= MAX_SEQ_TOKEN_LEN])
+    annotations = pickle.load(open('/home/user/Desktop/annots_all.pkl', 'rb'))
+    data_prefix = '/home/user/Desktop/cafa/dump/seqs_'
+
+    max_idx = int(max([float(i.replace('seqs_', '').replace('.pkl', '')) for i in os.listdir('/home/user/Desktop/cafa/dump/') if 'seqs' in i]))
+    print('Max idx: ', max_idx)
+    b_size = 100000
+    seq_tokens = []
+    for i in range(0, max_idx, b_size):
+        seq_tokens += pickle.load(open(data_prefix + str(i) + '.pkl', 'rb'))
+
+    # seqs, annotations = encode_data()
+
+    ALL_AAS = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+    ALL_AAS += [TOKEN_PAD, TOKEN_UNK, TOKEN_CLS, TOKEN_SEP, TOKEN_MASK]
+    VOCAB_SIZE = len(ALL_AAS)
+
+    # TODO We now need to update vocab_size to len(ALL_AAS)
+    # seq_tokens = list(p_map(sp.encode_as_ids, seqs, cpus=2, verbose=True))
+    padded_seq_tokens = np.array([pad_tokens(tokens) for tokens in tqdm(seq_tokens) if len(tokens) <= MAX_SEQ_TOKEN_LEN], dtype='int8')
     print('Padded %d of %d sequences in appropriate length.' % (len(padded_seq_tokens), len(seq_tokens)))
     print('Shape of padded sequence tokens: %dx%d' % padded_seq_tokens.shape)
 
-    unique_annotations = sorted(set.union(*map(set, annotations)))
+    # unique_annotations = sorted(set.union(*map(set, tqdm(annotations, desc='Unique Annots'))))
+    # pickle.dump(unique_annotations, open('unique_a.pkl', 'wb'))
+
+    unique_annotations = pickle.load(open('unique_a.pkl', 'rb'))
+
     n_unique_annotations = len(unique_annotations)
     print('There are %d unique annotations.' % n_unique_annotations)
     annotation_to_index = {annotation: i for i, annotation in enumerate(unique_annotations)}
-    encoded_annotations = np.array([encode_labels(record_annotations, annotation_to_index, n_unique_annotations) for record_annotations, record_tokens in \
-            zip(annotations, seq_tokens) if len(record_tokens) <= MAX_SEQ_TOKEN_LEN])
+    encoded_annotations = np.array([encode_labels(record_annotations, annotation_to_index, n_unique_annotations) for record_annotations, record_tokens in zip(annotations, seq_tokens) if len(record_tokens) <= MAX_SEQ_TOKEN_LEN], dtype='int8')
     print('Shape of encoded annotations: %dx%d' % encoded_annotations.shape)
-    
+    sp = None
     return sp, unique_annotations, padded_seq_tokens, encoded_annotations
     
 def create_bert_model(annotation_dim):
@@ -352,54 +402,83 @@ def fit_model(model, encoded_tokens, encoded_annotations):
             model.save_weights(MODEL_WEIGHTS_FILE)
     return model
 
-def create_submission_files(prediction_model, output_dir, target_seqs, go_annotations_meta, model_id=1):
+
+def process_submission_batch(prediction_model, formatted_predictions, batch_cafa_ids, batch_seqs, batch_go_annotation_indices, go_annotation_indices):
+    MAX_ANNOTATIONS_PER_PROTEIN = 1500
+
+    batch_annotation_predictions = prediction_model(batch_seqs, batch_go_annotation_indices)
+
+    for cafa_id, annotation_predictions in zip(batch_cafa_ids, batch_annotation_predictions):
+        top_predicted_annotations = list(sorted(annotation_predictions.items(), reverse=True)) \
+            [:MAX_ANNOTATIONS_PER_PROTEIN]
+        top_predicted_annotations = [(annotation_index, round(score, 2)) for annotation_index, score in \
+                                     top_predicted_annotations]
+        formatted_predictions.extend(['%s\t%s\t%s' % (cafa_id, go_annotation_indices[annotation_index], score) for \
+                                      annotation_index, score in top_predicted_annotations if score > 0])
+
+
+def create_submission_files(prediction_model, batch_size, output_dir, target_seqs, go_annotation_indices, model_id=1):
     '''
-    prediction model is expected to be a function that takes two arguments (seq and annotations) and returns the final,
-    refined annotations. The protein seq is expected as a simple string of aa letters. The input annotations is expected
-    as a list of integers, as provided in the SQLITE DB. The output annotations is expected as a dictionary, mapping each
-    annotation integer (the same indices as in the input) into a confidence score between 0 to 1.
+    prediction model is expected to be a function that takes two arguments (seqs and annotations) and returns the final,
+    refined annotations. The function is expected to work in batch (i.e. receive multiple inputs and produce multiple
+    outputs). The protein seqs is expected as a list of strings of aa letters. The input annotations are expected
+    as a list of list of integers, as provided in the SQLITE DB. There should be full correspondence between each seq
+    string to each set of annotations (list of integers); each pair is considered a distinct protein. The output
+    annotations is expected as a list of dictionaries, mapping each annotation integer (the same indices provided by
+    the SQLITE DB) into a confidence score between 0 to 1. Each output dictionary corresponds to the corresponding input
+    protein.
 
     See: https://www.biofunctionprediction.org/cafa-targets/CAFA4_rules%20_01_2020_v4.pdf
     '''
 
-    MAX_ANNOTATIONS = 1500
-
     OUTPUT_FILE_NAME_PATTERN = 'linialgroup_%d_%s_go.txt'
     SUBMISSION_FILE_PREFIX = 'AUTHOR Linial' + '\n' + ('MODEL %d' % model_id) + '\n' + 'KEYWORDS machine learning.'
 
-    go_annotation_index_to_id = go_annotations_meta['id']
+    for tax_id, tax_target_seqs in target_seqs.groupby('taxa_id'):
 
-    for idx, (tax_id, tax_target_seqs) in tqdm(enumerate(target_seqs.groupby('taxa_id'))):
-        gc.collect()
         print('Preparing submission for tax ID %s...' % tax_id)
         formatted_predictions = []
+        batch_cafa_ids = []
+        batch_seqs = []
+        batch_go_annotation_indices = []
 
-        for _, (cafa_id, seq, raw_go_annotation_indices) in tqdm(tax_target_seqs[
-            ['cafa_id', 'seq', 'complete_go_annotation_indices']].iterrows(), total=len(tax_target_seqs), desc='Tax id: %s (%s/%s)' % (tax_id, idx, len(target_seqs.groupby('taxa_id')))):
-            go_annotation_indices = [] if pd.isnull(raw_go_annotation_indices) else json.loads(
-                raw_go_annotation_indices)
-            annotation_predictions = prediction_model(seq, go_annotation_indices)
-            top_predicted_annotations = list(sorted(annotation_predictions.items(), reverse=True))[:MAX_ANNOTATIONS]
-            top_predicted_annotations = [(annotation_index, round(score, 2)) for annotation_index, score in
-                                         top_predicted_annotations]
-            formatted_predictions.extend(
-                ['%s\t%s\t%s' % (cafa_id, go_annotation_index_to_id[annotation_index], score) for
-                 annotation_index, score in top_predicted_annotations if score > 0])
+        for _, (cafa_id, seq, raw_go_annotation_indices) in tax_target_seqs[['cafa_id', 'seq', 'complete_go_annotation_indices']].iterrows():
+
+            batch_cafa_ids.append(cafa_id)
+            batch_seqs.append(seq)
+            batch_go_annotation_indices.append([] if pd.isnull(raw_go_annotation_indices) else \
+                                                   json.loads(raw_go_annotation_indices))
+
+            if len(batch_cafa_ids) >= batch_size:
+                process_submission_batch(prediction_model, formatted_predictions, batch_cafa_ids, batch_seqs, batch_go_annotation_indices, go_annotation_indices)
+                batch_cafa_ids = []
+                batch_seqs = []
+                batch_go_annotation_indices = []
+
+        if len(batch_cafa_ids) > 0:
+            process_submission_batch(prediction_model, formatted_predictions, batch_cafa_ids, batch_seqs, batch_go_annotation_indices, go_annotation_indices)
 
         tax_submission_content = SUBMISSION_FILE_PREFIX + '\n' + '\n'.join(formatted_predictions) + '\n' + 'END'
 
         with open(os.path.join(output_dir, OUTPUT_FILE_NAME_PATTERN % (model_id, tax_id)), 'w') as f:
             f.write(tax_submission_content)
-        del formatted_predictions
-        gc.collect()
 
     print('Done.')
+
 
 def create_prediction_model(sp, model, unique_annotations):
     annotation_to_index = {annotation: i for i, annotation in enumerate(unique_annotations)}
 
     def prediction_model(seq, go_annotation_indices):
-        seq_token = sp.encode_as_ids(seq)
+
+        print('Encoding seqs..')
+        ALL_AAS = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+        ALL_AAS += [TOKEN_PAD, TOKEN_UNK, TOKEN_CLS, TOKEN_SEP, TOKEN_MASK]
+        aa_to_index = {aa: i for i, aa in enumerate(ALL_AAS)}
+
+        seq_token = np.array([aa_to_index[aa] for aa in seq])
+
+        # seq_token = sp.encode_as_ids(seq)
         # TODO: Deal with padding lengths...
         try:
             if len(seq_token) <= MAX_SEQ_TOKEN_LEN:
@@ -422,25 +501,24 @@ def create_prediction_model(sp, model, unique_annotations):
 
 
 def run_pipeline():
-    
-    #create_bert_model(291) # XXX
     install_dependencies()
     setup_tensorflow()
-            
     sp, unique_annotations, encoded_tokens, encoded_annotations = create_dataset()
-    model = create_and_compile_model(len(unique_annotations))
-    model = fit_model(model, encoded_tokens, encoded_annotations)
+    # model = create_and_compile_model(len(unique_annotations))
+    # model = fit_model(model, encoded_tokens, encoded_annotations)
+    ALL_AAS = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+    ALL_AAS += [TOKEN_PAD, TOKEN_UNK, TOKEN_CLS, TOKEN_SEP, TOKEN_MASK]
+    aa_to_index = {aa: i for i, aa in enumerate(ALL_AAS)}
 
-    print('about')
-    # model = unsupervised_weaponized_bert(encoded_tokens, encoded_annotations)
-    # model = train_weaponized_bert(encoded_tokens, encoded_annotations, model=None)
+    model, token_dict = unsupervised_weaponized_bert(encoded_tokens, aa_to_index)
+    pred = exract_embeddings(model, token_dict, encoded_tokens, encoded_annotations)
+    print(pred.shape)
+    model = train_weaponized_bert(model, token_dict, encoded_tokens, encoded_annotations)
 
     targets = pd.read_csv(TARGET_SEQS, index_col=0)
     go_annots = pd.read_csv(GO_ANNOTATIONS, index_col='index')
 
-    create_submission_files(create_prediction_model(sp, model, unique_annotations), '.', targets ,go_annots, model_id=1)
-
-    # prediction_model, output_dir, target_seqs, go_annotations_meta, model_id=1
+    create_submission_files(create_prediction_model(sp, model, unique_annotations), 32, '.', targets ,go_annots, model_id=1)
 
 
 if __name__ == '__main__':
