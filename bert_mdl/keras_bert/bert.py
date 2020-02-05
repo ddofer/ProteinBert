@@ -292,9 +292,6 @@ def gen_batch_inputs(sentence_pairs,
     inputs = [np.asarray(x) for x in [token_inputs, segment_inputs, masked_inputs]]
     outputs = [np.asarray(np.expand_dims(x, axis=-1)) for x in [mlm_outputs, nsp_outputs]]
     return inputs, outputs
-    """Get basic dictionary containing special tokens."""
-
-
 
 
 def get_token_embedding(model):

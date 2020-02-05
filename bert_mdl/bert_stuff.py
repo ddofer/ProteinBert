@@ -22,6 +22,10 @@ from keras.layers import Dense, Input, Flatten, concatenate, Dropout, Lambda
 from keras_bert.loader import load_trained_model_from_checkpoint, build_model_from_config
 
 def pad_tokens(tokens, max_len, PAD_TOKEN): return np.concatenate([tokens, np.full(max_len - len(tokens), PAD_TOKEN)])
+def encode_labels(labels, label_to_index, n_labels):
+    encoded_labels = np.zeros(n_labels, dtype=np.int32)
+    for label in labels: encoded_labels[label_to_index[label]] += 1
+    return encoded_labels
 
 def get_bert_generator(token_dict, annotations, token_list, MAX_SEQ_TOKEN_LEN, PAD_TOKEN, seq_len=20, mask_rate=0.3, swap_sentence_rate=1.0):
     global VOCAB_SIZE
@@ -38,7 +42,7 @@ def get_bert_generator(token_dict, annotations, token_list, MAX_SEQ_TOKEN_LEN, P
                         [padded_seq_tokens[batch_idx: batch_idx+BATCH_SIZE], padded_seq_tokens[batch_idx: batch_idx+BATCH_SIZE]],
                         token_dict,
                         token_list,
-                        seq_len=seq_len,
+                        seq_len=MAX_SEQ_TOKEN_LEN,
                         mask_rate=mask_rate,
                         swap_sentence_rate=swap_sentence_rate,
                     )
@@ -48,6 +52,48 @@ def get_bert_generator(token_dict, annotations, token_list, MAX_SEQ_TOKEN_LEN, P
 
                         yield  [[np.expand_dims(batch[0][0][sample_idx], axis=0), np.expand_dims(batch[0][1][sample_idx], axis=0), np.expand_dims(batch[0][2][sample_idx], axis=0)],
                                [np.expand_dims(batch[1][0][sample_idx], axis=0), np.expand_dims(batch[1][1][sample_idx], axis=0)]]
+
+                    # By Batch
+                    # yield [batch[0][sample_idx], batch[1][sample_idx]]
+
+    return _generator
+
+
+def get_bert_generator_supervised(MAX_SEQ_TOKEN_LEN, PAD_TOKEN):
+    global VOCAB_SIZE
+    def _generator():
+        while True:
+            data_prefix = '/home/user/Desktop/cafa/dump/seqs_'
+            max_idx = int(max( [float(i.replace('seqs_', '').replace('.pkl', '')) for i in os.listdir('/home/user/Desktop/cafa/dump/') if 'seqs' in i]))
+            for i in range(0, max_idx, 100000):
+                seq_tokens = pickle.load(open(data_prefix + str(i) + '.pkl', 'rb'))
+                padded_seq_tokens = np.array( [pad_tokens(tokens, MAX_SEQ_TOKEN_LEN, PAD_TOKEN) for tokens in tqdm(seq_tokens) if len(tokens) <= MAX_SEQ_TOKEN_LEN], dtype='int8')
+
+                annotations = pickle.load(open('/home/user/Desktop/annots_all.pkl', 'rb'))
+                # unique_annotations = sorted(set.union(*map(set, tqdm(annotations, desc='Unique Annots'))))
+                # pickle.dump(unique_annotations, open('unique_a.pkl', 'wb'))
+                unique_annotations = pickle.load(open('unique_a.pkl', 'rb'))
+
+                n_unique_annotations = len(unique_annotations)
+                print('There are %d unique annotations.' % n_unique_annotations)
+                annotation_to_index = {annotation: i for i, annotation in enumerate(unique_annotations)}
+                encoded_annotations = np.array([encode_labels(record_annotations, annotation_to_index, n_unique_annotations) for record_annotations, record_tokens in zip(annotations, seq_tokens) if len(record_tokens) <= MAX_SEQ_TOKEN_LEN], dtype='int8')
+
+                BATCH_SIZE = 32
+                for batch_idx in range(0, padded_seq_tokens.shape[0], BATCH_SIZE):
+
+                    token_input = padded_seq_tokens[batch_idx: batch_idx + BATCH_SIZE]
+                    seg_input = np.zeros((token_input.shape[0], token_input.shape[1]))
+                    mask_input = np.ones((token_input.shape[0], token_input.shape[1]))
+
+                    batch = [[token_input, seg_input, mask_input],
+                             encoded_annotations[batch_idx: batch_idx + BATCH_SIZE]]
+
+                    # By Sample
+                    for sample_idx in range(len(batch[0][0])):
+
+                        yield  [[np.expand_dims(batch[0][0][sample_idx], axis=0), np.expand_dims(batch[0][1][sample_idx], axis=0), np.expand_dims(batch[0][2][sample_idx], axis=0)],
+                               np.expand_dims(batch[1][sample_idx], axis=0)]
 
                     # By Batch
                     # yield [batch[0][sample_idx], batch[1][sample_idx]]
@@ -71,8 +117,8 @@ def get_bert_generator_old(token_input, token_dict, token_list, seq_len=20, mask
                 swap_sentence_rate=swap_sentence_rate,
             )
 
-
     return _generator
+
 
 def gen_token_dict(token_input):
     # Build token dictionary
@@ -85,16 +131,12 @@ def gen_token_dict(token_input):
     token_list = list(token_dict.keys())  # Used for selecting a random word
     return token_dict, token_list
 
-
-
 def identity(x):
     return x
-
 
 symbolic = identity
 if hasattr(K, 'symbolic'):
     symbolic = K.symbolic
-
 
 class AdamWarmup(keras.optimizers.Optimizer):
     """Adam optimizer with warmup.
@@ -215,94 +257,3 @@ class AdamWarmup(keras.optimizers.Optimizer):
         }
         base_config = super(AdamWarmup, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
-"""
-class AdamWarmup(keras.optimizers.Optimizer):
-    def __init__(self, decay_steps, warmup_steps, min_lr=0.0,
-                 lr=0.001, beta_1=0.9, beta_2=0.999,
-                 epsilon=None, kernel_weight_decay=0., bias_weight_decay=0.,
-                 amsgrad=False, **kwargs):
-        super(AdamWarmup, self).__init__(**kwargs)
-        with K.name_scope(self.__class__.__name__):
-            self.decay_steps = K.variable(decay_steps, name='decay_steps')
-            self.warmup_steps = K.variable(warmup_steps, name='warmup_steps')
-            self.min_lr = K.variable(min_lr, name='min_lr')
-            self.iterations = K.variable(0, dtype='int64', name='iterations')
-            self.learning_rate = K.variable(lr, name='lr')
-            self.beta_1 = K.variable(beta_1, name='beta_1')
-            self.beta_2 = K.variable(beta_2, name='beta_2')
-            self.kernel_weight_decay = K.variable(kernel_weight_decay, name='kernel_weight_decay')
-            self.bias_weight_decay = K.variable(bias_weight_decay, name='bias_weight_decay')
-        if epsilon is None:
-            epsilon = K.epsilon()
-        self.epsilon = epsilon
-        self.initial_kernel_weight_decay = kernel_weight_decay
-        self.initial_bias_weight_decay = bias_weight_decay
-        self.amsgrad = amsgrad
-
-    def get_updates(self, loss, params):
-        grads = self.get_gradients(loss, params)
-        self.updates = [K.update_add(self.iterations, 1)]
-
-        t = K.cast(self.iterations, K.floatx()) + 1
-
-        lr = K.switch(
-            t <= self.warmup_steps,
-            self.learning_rate * (t / self.warmup_steps),
-            self.learning_rate * (1.0 - K.minimum(t, self.decay_steps) / self.decay_steps),
-        )
-
-        lr_t = lr * (K.sqrt(1. - K.pow(self.beta_2, t)) /
-                     (1. - K.pow(self.beta_1, t)))
-
-        ms = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
-        vs = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
-        if self.amsgrad:
-            vhats = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
-        else:
-            vhats = [K.zeros(1) for _ in params]
-        self.weights = [self.iterations] + ms + vs + vhats
-
-        for p, g, m, v, vhat in zip(params, grads, ms, vs, vhats):
-            m_t = (self.beta_1 * m) + (1. - self.beta_1) * g
-            v_t = (self.beta_2 * v) + (1. - self.beta_2) * K.square(g)
-            if self.amsgrad:
-                vhat_t = K.maximum(vhat, v_t)
-                p_t = m_t / (K.sqrt(vhat_t) + self.epsilon)
-                self.updates.append(K.update(vhat, vhat_t))
-            else:
-                p_t = m_t / (K.sqrt(v_t) + self.epsilon)
-
-            if 'bias' in p.name or 'Norm' in p.name:
-                if self.initial_bias_weight_decay > 0.0:
-                    p_t += self.bias_weight_decay * p
-            else:
-                if self.initial_kernel_weight_decay > 0.0:
-                    p_t += self.kernel_weight_decay * p
-            p_t = p - lr_t * p_t
-
-            self.updates.append(K.update(m, m_t))
-            self.updates.append(K.update(v, v_t))
-            new_p = p_t
-
-            if getattr(p, 'constraint', None) is not None:
-                new_p = p.constraint(new_p)
-
-            self.updates.append(K.update(p, new_p))
-        return self.updates
-
-    def get_config(self):
-        config = {
-            'decay_steps': float(K.get_value(self.decay_steps)),
-            'warmup_steps': float(K.get_value(self.warmup_steps)),
-            'min_lr': float(K.get_value(self.min_lr)),
-            'lr': float(K.get_value(self.lr)),
-            'beta_1': float(K.get_value(self.beta_1)),
-            'beta_2': float(K.get_value(self.beta_2)),
-            'epsilon': self.epsilon,
-            'kernel_weight_decay': float(K.get_value(self.kernel_weight_decay)),
-            'bias_weight_decay': float(K.get_value(self.bias_weight_decay)),
-            'amsgrad': self.amsgrad,
-        }
-        base_config = super(AdamWarmup, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))
-"""

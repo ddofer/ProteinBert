@@ -472,8 +472,7 @@ def create_submission_files(prediction_model, batch_size, output_dir, target_seq
 
             batch_cafa_ids.append(cafa_id)
             batch_seqs.append(seq)
-            batch_go_annotation_indices.append([] if pd.isnull(raw_go_annotation_indices) else \
-                                                   json.loads(raw_go_annotation_indices))
+            batch_go_annotation_indices.append([] if pd.isnull(raw_go_annotation_indices) else json.loads(raw_go_annotation_indices))
 
             if len(batch_cafa_ids) >= batch_size:
                 formatted_predictions = process_submission_batch(prediction_model, formatted_predictions, batch_cafa_ids, batch_seqs, batch_go_annotation_indices, go_annotation_indices)
@@ -538,7 +537,7 @@ def run_pipeline():
     model, token_dict = unsupervised_weaponized_bert(aa_to_index, encoded_annotations, MAX_SEQ_TOKEN_LEN, PAD_TOKEN)
     # pred = exract_embeddings(model, token_dict, encoded_tokens, encoded_annotations)
     # print(pred.shape)
-    model = train_weaponized_bert(model, token_dict, encoded_annotations)
+    model = train_weaponized_bert(model, token_dict, MAX_SEQ_TOKEN_LEN, PAD_TOKEN, encoded_annotations)
 
     targets = pd.read_csv(TARGET_SEQS, index_col=0)
     go_annots = pd.read_csv(GO_ANNOTATIONS, index_col='index')
