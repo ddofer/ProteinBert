@@ -21,14 +21,15 @@ from keras_bert.loader import load_trained_model_from_checkpoint, build_model_fr
 
 from bert_stuff import *
 
-def train_weaponized_bert(model, token_dict, token_input, train_labels, batch_size=32, epochs=10):
+
+def train_weaponized_bert(model, token_dict, train_labels, batch_size=32, epochs=10):
 
     lr = 2e-5
     weight_decay = 0.001
     nb_epochs = epochs 
     bsz = batch_size
-
-    decay_steps = int(nb_epochs * token_input.shape[0] / bsz)
+    num_of_all_samples = 100000000
+    decay_steps = int(nb_epochs * num_of_all_samples / bsz)
     warmup_steps = int(0.1 * decay_steps)
     adamwarm = AdamWarmup(lr=lr, decay_steps=decay_steps, warmup_steps=warmup_steps, weight_decay=weight_decay)
 
@@ -38,9 +39,9 @@ def train_weaponized_bert(model, token_dict, token_input, train_labels, batch_si
     model3.compile(loss='binary_crossentropy', optimizer=adamwarm)
     model3.summary()
 
-    seg_input = np.zeros((token_input.shape[0], token_input.shape[1]))
-    mask_input = np.ones((token_input.shape[0], token_input.shape[1]))
-    model3.fit([token_input, seg_input, mask_input], train_labels, batch_size=bsz, epochs=nb_epochs)
+    # seg_input = np.zeros((token_input.shape[0], token_input.shape[1]))
+    # mask_input = np.ones((token_input.shape[0], token_input.shape[1]))
+    # model3.fit([token_input, seg_input, mask_input], train_labels, batch_size=bsz, epochs=nb_epochs)
     return model3
 
 
@@ -58,30 +59,33 @@ def exract_prediction(model, token_dict, token_input, train_labels):
     return model.predict([token_input, seg_input, mask_input])
 
 
-def unsupervised_weaponized_bert(token_input, token_dict, annotations, MAX_SEQ_TOKEN_LEN, PAD_TOKEN, batch_size=32, epochs=1000000):
+def unsupervised_weaponized_bert(token_dict, annotations, MAX_SEQ_TOKEN_LEN, PAD_TOKEN, batch_size=32, epochs=1000000):
 
-    token_input = [token_input, token_input]
+
     model = get_model(
         token_num=len(token_dict),
         head_num=5,
         transformer_num=12,
         embed_dim=25,
         feed_forward_dim=100,
-        seq_len=token_input[0].shape[1],
-        pos_num=token_input[0].shape[1],
+        seq_len=None, # token_input[0].shape[1],
+        pos_num=MAX_SEQ_TOKEN_LEN,
         dropout_rate=0.05,
     )
 
     model.compile( optimizer=AdamWarmup( decay_steps=100000, warmup_steps=10000, lr=2e-5, weight_decay=0.01, weight_decay_pattern=['embeddings', 'kernel', 'W1', 'W2', 'Wk', 'Wq', 'Wv', 'Wo']), loss=keras.losses.sparse_categorical_crossentropy)
     model.summary()
 
-    generator = get_bert_generator(token_input, token_dict, annotations, list(token_dict.keys()), MAX_SEQ_TOKEN_LEN, PAD_TOKEN, seq_len=token_input[0].shape[1], mask_rate=0.3, swap_sentence_rate=1.0)
+    generator = get_bert_generator(token_dict, annotations, list(token_dict.keys()), MAX_SEQ_TOKEN_LEN, PAD_TOKEN, seq_len=MAX_SEQ_TOKEN_LEN, mask_rate=0.3, swap_sentence_rate=1.0)
     # plot_model(model, 'bert.png')
+
+    """
     model.fit_generator(
         generator=generator(),
-        steps_per_epoch=1000, # Fancy Batch size
+        steps_per_epoch=101800000, # Fancy Batch size
         epochs=epochs,
         validation_data=generator(),
         validation_steps=100)
         # callbacks=[ keras.callbacks.EarlyStopping(monitor='val_loss', patience=5) ],)
+    """
     return model, token_dict

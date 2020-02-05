@@ -23,7 +23,7 @@ from keras_bert.loader import load_trained_model_from_checkpoint, build_model_fr
 
 def pad_tokens(tokens, max_len, PAD_TOKEN): return np.concatenate([tokens, np.full(max_len - len(tokens), PAD_TOKEN)])
 
-def get_bert_generator(token_input, token_dict, annotations, token_list, MAX_SEQ_TOKEN_LEN, PAD_TOKEN, seq_len=20, mask_rate=0.3, swap_sentence_rate=1.0):
+def get_bert_generator(token_dict, annotations, token_list, MAX_SEQ_TOKEN_LEN, PAD_TOKEN, seq_len=20, mask_rate=0.3, swap_sentence_rate=1.0):
     global VOCAB_SIZE
     def _generator():
         while True:
@@ -53,6 +53,7 @@ def get_bert_generator(token_input, token_dict, annotations, token_list, MAX_SEQ
                     # yield [batch[0][sample_idx], batch[1][sample_idx]]
 
     return _generator
+
 
 def get_bert_generator_old(token_input, token_dict, token_list, seq_len=20, mask_rate=0.3, swap_sentence_rate=1.0):
 
