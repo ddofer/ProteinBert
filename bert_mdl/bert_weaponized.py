@@ -20,6 +20,7 @@ from keras.layers import Dense, Input, Flatten, concatenate, Dropout, Lambda
 from keras_bert.loader import load_trained_model_from_checkpoint, build_model_from_config
 
 from bert_stuff import *
+from keras.callbacks import ModelCheckpoint
 
 
 def train_weaponized_bert(model, token_dict, MAX_SEQ_TOKEN_LEN, PAD_TOKEN, train_labels, batch_size=32, epochs=10):
@@ -39,13 +40,15 @@ def train_weaponized_bert(model, token_dict, MAX_SEQ_TOKEN_LEN, PAD_TOKEN, train
     model3.compile(loss='binary_crossentropy', optimizer=adamwarm)
     model3.summary()
 
+    checkpoint = ModelCheckpoint("best_model.hdf5", monitor='loss', verbose=1, save_best_only=True, mode='auto', period=1)
     generator = get_bert_generator_supervised(MAX_SEQ_TOKEN_LEN, PAD_TOKEN)
     model3.fit_generator(
         generator=generator(),
-        steps_per_epoch=101800000, # Fancy Batch size
+        steps_per_epoch=100000, #   101800000, # Fancy Batch size
         epochs=epochs,
         validation_data=generator(),
-        validation_steps=100)
+        validation_steps=100,
+        callbacks=[checkpoint])
         # callbacks=[ keras.callbacks.EarlyStopping(monitor='val_loss', patience=5) ],)
     # model3.fit([token_input, seg_input, mask_input], train_labels, batch_size=bsz, epochs=nb_epochs)
     return model3
@@ -81,16 +84,18 @@ def unsupervised_weaponized_bert(token_dict, annotations, MAX_SEQ_TOKEN_LEN, PAD
     model.compile( optimizer=AdamWarmup( decay_steps=100000, warmup_steps=10000, lr=2e-5, weight_decay=0.01, weight_decay_pattern=['embeddings', 'kernel', 'W1', 'W2', 'Wk', 'Wq', 'Wv', 'Wo']), loss=keras.losses.sparse_categorical_crossentropy)
     model.summary()
 
+    checkpoint = ModelCheckpoint("best_model.hdf5", monitor='loss', verbose=1, save_best_only=True, mode='auto', period=1)
     generator = get_bert_generator(token_dict, annotations, list(token_dict.keys()), MAX_SEQ_TOKEN_LEN, PAD_TOKEN, seq_len=MAX_SEQ_TOKEN_LEN, mask_rate=0.3, swap_sentence_rate=1.0)
     # plot_model(model, 'bert.png')
 
 
     model.fit_generator(
         generator=generator(),
-        steps_per_epoch=101800000, # Fancy Batch size
+        steps_per_epoch= 100000, # 101800000, # Fancy Batch size
         epochs=epochs,
         validation_data=generator(),
-        validation_steps=100)
+        validation_steps=100,
+        callbacks=[checkpoint])
         # callbacks=[ keras.callbacks.EarlyStopping(monitor='val_loss', patience=5) ],)
-    
+
     return model, token_dict

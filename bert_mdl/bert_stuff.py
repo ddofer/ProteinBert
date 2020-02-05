@@ -30,11 +30,22 @@ def encode_labels(labels, label_to_index, n_labels):
 def get_bert_generator(token_dict, annotations, token_list, MAX_SEQ_TOKEN_LEN, PAD_TOKEN, seq_len=20, mask_rate=0.3, swap_sentence_rate=1.0):
     global VOCAB_SIZE
     def _generator():
+        data_prefix = '/home/user/Desktop/cafa/dump/seqs_'
+        max_idx = int(max([float(i.replace('seqs_', '').replace('.pkl', '')) for i in os.listdir('/home/user/Desktop/cafa/dump/') if 'seqs' in i]))
         while True:
-            data_prefix = '/home/user/Desktop/cafa/dump/seqs_'
-            max_idx = int(max( [float(i.replace('seqs_', '').replace('.pkl', '')) for i in os.listdir('/home/user/Desktop/cafa/dump/') if 'seqs' in i]))
             for i in range(0, max_idx, 100000):
                 seq_tokens = pickle.load(open(data_prefix + str(i) + '.pkl', 'rb'))
+                """
+                padded_seq_tokens = []
+                for tokens in tqdm(seq_tokens):
+                    if len(tokens) <= MAX_SEQ_TOKEN_LEN:
+                        padded_seq_tokens += pad_tokens(tokens, MAX_SEQ_TOKEN_LEN, PAD_TOKEN)
+                    else:
+                        # padded_seq_tokens += pad_tokens(tokens[:MAX_SEQ_TOKEN_LEN/2], MAX_SEQ_TOKEN_LEN, PAD_TOKEN)
+                        # padded_seq_tokens += pad_tokens(tokens[-MAX_SEQ_TOKEN_LEN/2:], MAX_SEQ_TOKEN_LEN, PAD_TOKEN)
+                        padded_seq_tokens += pad_tokens(tokens[:MAX_SEQ_TOKEN_LEN], MAX_SEQ_TOKEN_LEN, PAD_TOKEN) ## todo - take start and end
+                padded_seq_tokens = np.array(padded_seq_tokens, dtype='int8')
+                """
                 padded_seq_tokens = np.array( [pad_tokens(tokens, MAX_SEQ_TOKEN_LEN, PAD_TOKEN) for tokens in tqdm(seq_tokens) if len(tokens) <= MAX_SEQ_TOKEN_LEN], dtype='int8')
                 BATCH_SIZE = 32
                 for batch_idx in range(0, padded_seq_tokens.shape[0], BATCH_SIZE):
