@@ -11,7 +11,7 @@ from itertools import islice
 import numpy as np
 import pandas as pd
 import sqlite3
-from tqdm import tqdm
+from tqdm import tqdm, trange
 from pyfaidx import Faidx
 
 import sentencepiece as spm
@@ -101,8 +101,8 @@ def format_quantity(quantity):
     else:
         return str(quantity)
         
-def pad_tokens(tokens):
-    return np.concatenate([tokens, np.full(MAX_SEQ_TOKEN_LEN - len(tokens), PAD_TOKEN)])
+def pad_tokens(tokens, max_len = MAX_SEQ_TOKEN_LEN):
+    return np.concatenate([tokens, np.full(max_len - len(tokens), PAD_TOKEN)])
     
 def encode_labels(labels, label_to_index, n_labels):
     
@@ -243,13 +243,15 @@ def create_dataset():
     global VOCAB_SIZE
 
     annotations = pickle.load(open('/home/user/Desktop/annots_all.pkl', 'rb'))
+
     data_prefix = '/home/user/Desktop/cafa/dump/seqs_'
 
     max_idx = int(max([float(i.replace('seqs_', '').replace('.pkl', '')) for i in os.listdir('/home/user/Desktop/cafa/dump/') if 'seqs' in i]))
     print('Max idx: ', max_idx)
     b_size = 100000
+    max_idx = b_size * 2
     seq_tokens = []
-    for i in range(0, max_idx, b_size):
+    for i in trange(0, max_idx, b_size):
         seq_tokens += pickle.load(open(data_prefix + str(i) + '.pkl', 'rb'))
 
     # seqs, annotations = encode_data()
@@ -467,41 +469,41 @@ def create_submission_files(prediction_model, batch_size, output_dir, target_seq
 
 
 def create_prediction_model(sp, model, unique_annotations):
+    
+    ALL_AAS = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+    ALL_AAS += [TOKEN_PAD, TOKEN_UNK, TOKEN_CLS, TOKEN_SEP, TOKEN_MASK]
+    aa_to_index = {aa: i for i, aa in enumerate(ALL_AAS)}
+    
     annotation_to_index = {annotation: i for i, annotation in enumerate(unique_annotations)}
 
-    def prediction_model(seq, go_annotation_indices):
+    def prediction_model(batch_seqs, batch_go_annotation_indices):
 
-        print('Encoding seqs..')
-        ALL_AAS = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ')
-        ALL_AAS += [TOKEN_PAD, TOKEN_UNK, TOKEN_CLS, TOKEN_SEP, TOKEN_MASK]
-        aa_to_index = {aa: i for i, aa in enumerate(ALL_AAS)}
+        max_len = max(map(len, batch_seqs))
 
-        seq_token = np.array([aa_to_index[aa] for aa in seq])
+        batch_padded_seq_tokens = np.array([pad_tokens([aa_to_index[aa] for aa in seq], max_len) for seq in batch_seqs])
+        batch_encoded_annotations = np.array([encode_labels(go_annotation_indices, annotation_to_index, len(unique_annotations)) for \
+                go_annotation_indices in batch_go_annotation_indices])
+                
+        # _, batch_pred_annotation_scores = model.predict(batch_padded_seq_tokens, batch_encoded_annotations)
+        token_input = batch_padded_seq_tokens
+        seg_input = np.zeros((token_input.shape[0], token_input.shape[1]))
+        mask_input = np.ones((token_input.shape[0], token_input.shape[1]))
+
+        _, batch_pred_annotation_scores = model.predict([batch_padded_seq_tokens, seg_input, mask_input])
+        batch_pred_annotation_scores_as_dicts = [{unique_annotations[i]: score  for i, score in enumerate(pred_annotation_scores)} for \
+                pred_annotation_scores in batch_pred_annotation_scores]
+        return batch_pred_annotation_scores_as_dicts
 
         # seq_token = sp.encode_as_ids(seq)
-        # TODO: Deal with padding lengths...
-        try:
-            if len(seq_token) <= MAX_SEQ_TOKEN_LEN:
-                padded_seq_token = pad_tokens(seq_token)
-                encoded_annotations = encode_labels(go_annotation_indices, annotation_to_index, len(unique_annotations))
-
-                _, pred = model.predict([np.expand_dims(padded_seq_token, axis = 0), np.asarray(np.expand_dims(encoded_annotations, axis = 0), dtype='float32')])
-
-                pred_dict = {unique_annotations[i]: score  for i, score in enumerate(pred[0])}
-                return pred_dict
-            else:
-                return {go_annotation_index: 1.0 for go_annotation_index in go_annotation_indices}
-        except:
-            print('\n' + ('-' * 80) + '\n\nException in prediction_model! Using 1.0 as prediction \n')
-            traceback.print_exc()
-            print(('-' * 80) + '\n\n')
-            return {go_annotation_index: 1.0 for go_annotation_index in go_annotation_indices}
+        
+        #else:
+        #    return {go_annotation_index: 1.0 for go_annotation_index in go_annotation_indices}
 
     return prediction_model
 
 
 def run_pipeline():
-    install_dependencies()
+    # install_dependencies()
     setup_tensorflow()
     sp, unique_annotations, encoded_tokens, encoded_annotations = create_dataset()
     # model = create_and_compile_model(len(unique_annotations))
@@ -510,7 +512,7 @@ def run_pipeline():
     ALL_AAS += [TOKEN_PAD, TOKEN_UNK, TOKEN_CLS, TOKEN_SEP, TOKEN_MASK]
     aa_to_index = {aa: i for i, aa in enumerate(ALL_AAS)}
 
-    model, token_dict = unsupervised_weaponized_bert(encoded_tokens, aa_to_index)
+    model, token_dict = unsupervised_weaponized_bert(encoded_tokens, aa_to_index, encoded_annotations, MAX_SEQ_TOKEN_LEN, PAD_TOKEN)
     pred = exract_embeddings(model, token_dict, encoded_tokens, encoded_annotations)
     print(pred.shape)
     model = train_weaponized_bert(model, token_dict, encoded_tokens, encoded_annotations)

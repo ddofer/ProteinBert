@@ -239,7 +239,7 @@ def gen_batch_inputs(sentence_pairs,
     :param force_mask: At least one position will be masked.
     :return: All the inputs and outputs.
     """
-    batch_size = len(sentence_pairs)
+    batch_size = len(sentence_pairs[0])
     base_dict = get_base_dict()
     unknown_index = token_dict[TOKEN_UNK]
     # Generate sentence swapping mapping

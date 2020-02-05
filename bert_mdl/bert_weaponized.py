@@ -13,6 +13,7 @@ import tensorflow as tf
 import keras.backend as K
 from keras.models import Model
 from keras import backend as K
+from keras.utils import plot_model
 from keras_bert.keras_bert.bert import get_model
 from keras_bert import gen_batch_inputs, get_base_dict, compile_model
 from keras.layers import Dense, Input, Flatten, concatenate, Dropout, Lambda
@@ -57,7 +58,7 @@ def exract_prediction(model, token_dict, token_input, train_labels):
     return model.predict([token_input, seg_input, mask_input])
 
 
-def unsupervised_weaponized_bert(token_input, token_dict, batch_size=32, epochs=1000000):
+def unsupervised_weaponized_bert(token_input, token_dict, annotations, MAX_SEQ_TOKEN_LEN, PAD_TOKEN, batch_size=32, epochs=1000000):
 
     token_input = [token_input, token_input]
     model = get_model(
@@ -74,8 +75,8 @@ def unsupervised_weaponized_bert(token_input, token_dict, batch_size=32, epochs=
     model.compile( optimizer=AdamWarmup( decay_steps=100000, warmup_steps=10000, lr=2e-5, weight_decay=0.01, weight_decay_pattern=['embeddings', 'kernel', 'W1', 'W2', 'Wk', 'Wq', 'Wv', 'Wo']), loss=keras.losses.sparse_categorical_crossentropy)
     model.summary()
 
-    generator = get_bert_generator(token_input, token_dict, list(token_dict.keys()), seq_len=token_input[0].shape[1], mask_rate=0.3, swap_sentence_rate=1.0)
-
+    generator = get_bert_generator(token_input, token_dict, annotations, list(token_dict.keys()), MAX_SEQ_TOKEN_LEN, PAD_TOKEN, seq_len=token_input[0].shape[1], mask_rate=0.3, swap_sentence_rate=1.0)
+    # plot_model(model, 'bert.png')
     model.fit_generator(
         generator=generator(),
         steps_per_epoch=1000, # Fancy Batch size
@@ -83,5 +84,4 @@ def unsupervised_weaponized_bert(token_input, token_dict, batch_size=32, epochs=
         validation_data=generator(),
         validation_steps=100)
         # callbacks=[ keras.callbacks.EarlyStopping(monitor='val_loss', patience=5) ],)
-
     return model, token_dict

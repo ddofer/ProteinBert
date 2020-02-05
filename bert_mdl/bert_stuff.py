@@ -6,10 +6,12 @@ import json
 import keras
 import random
 import codecs
+import pickle
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 import keras.backend as K
+from tqdm import trange, tqdm
 from keras.models import Model
 from keras import backend as K
 from keras_bert.backend import keras
@@ -19,11 +21,46 @@ from keras_bert import gen_batch_inputs, get_base_dict, compile_model
 from keras.layers import Dense, Input, Flatten, concatenate, Dropout, Lambda
 from keras_bert.loader import load_trained_model_from_checkpoint, build_model_from_config
 
+def pad_tokens(tokens, max_len, PAD_TOKEN): return np.concatenate([tokens, np.full(max_len - len(tokens), PAD_TOKEN)])
 
-def get_bert_generator(token_input, token_dict, token_list, seq_len=20, mask_rate=0.3, swap_sentence_rate=1.0):
+def get_bert_generator(token_input, token_dict, annotations, token_list, MAX_SEQ_TOKEN_LEN, PAD_TOKEN, seq_len=20, mask_rate=0.3, swap_sentence_rate=1.0):
+    global VOCAB_SIZE
+    def _generator():
+        while True:
+            data_prefix = '/home/user/Desktop/cafa/dump/seqs_'
+            max_idx = int(max( [float(i.replace('seqs_', '').replace('.pkl', '')) for i in os.listdir('/home/user/Desktop/cafa/dump/') if 'seqs' in i]))
+            for i in range(0, max_idx, 100000):
+                seq_tokens = pickle.load(open(data_prefix + str(i) + '.pkl', 'rb'))
+                padded_seq_tokens = np.array( [pad_tokens(tokens, MAX_SEQ_TOKEN_LEN, PAD_TOKEN) for tokens in tqdm(seq_tokens) if len(tokens) <= MAX_SEQ_TOKEN_LEN], dtype='int8')
+                BATCH_SIZE = 32
+                for batch_idx in range(0, padded_seq_tokens.shape[0], BATCH_SIZE):
+                    batch =  gen_batch_inputs(
+                        [padded_seq_tokens[batch_idx: batch_idx+BATCH_SIZE], padded_seq_tokens[batch_idx: batch_idx+BATCH_SIZE]],
+                        token_dict,
+                        token_list,
+                        seq_len=seq_len,
+                        mask_rate=mask_rate,
+                        swap_sentence_rate=swap_sentence_rate,
+                    )
+
+                    # By Sample
+                    for sample_idx in range(len(batch[0][0])):
+
+                        yield  [[np.expand_dims(batch[0][0][sample_idx], axis=0), np.expand_dims(batch[0][1][sample_idx], axis=0), np.expand_dims(batch[0][2][sample_idx], axis=0)],
+                               [np.expand_dims(batch[1][0][sample_idx], axis=0), np.expand_dims(batch[1][1][sample_idx], axis=0)]]
+
+                    # By Batch
+                    # yield [batch[0][sample_idx], batch[1][sample_idx]]
+
+    return _generator
+
+def get_bert_generator_old(token_input, token_dict, token_list, seq_len=20, mask_rate=0.3, swap_sentence_rate=1.0):
 
     def _generator():
         while True:
+            # for file in all_files:
+            #load pickle
+            #yield the pickled data
             yield gen_batch_inputs(
                 token_input,
                 token_dict,
@@ -32,6 +69,8 @@ def get_bert_generator(token_input, token_dict, token_list, seq_len=20, mask_rat
                 mask_rate=mask_rate,
                 swap_sentence_rate=swap_sentence_rate,
             )
+
+
     return _generator
 
 def gen_token_dict(token_input):
