@@ -20,12 +20,12 @@ BENCHMARKS_DIR = '/cs/phd/nadavb/cafa_project/data/proteomic_benchmarks'
 N_ANNOTATIONS = 8943
 
 BASELINE_SETTINGS = {
-    'seq_len': 450, # TODO: Temporary hack, so we don't have to deal with long sequences for now.
+    'seq_len': 450, # TODO: Temporary hack, so we don't have to deal with long sequences for now (and all the <START>/<END>/<PAD> tokenization).
     'batch_size': 32,
-    'initial_lr': 3e-04,
+    'initial_lr': 5e-05,
     'training_callbacks': [
         keras.callbacks.ReduceLROnPlateau(patience = 1, factor = 0.35),
-        keras.callbacks.EarlyStopping(patience = 1),
+        keras.callbacks.EarlyStopping(patience = 2),
     ],
     'max_epochs': 80,
     'max_dataset_size': None,
@@ -36,7 +36,6 @@ DEBUG_SETTINGS = {
     'max_dataset_size': 500,
 }
 
-# TODO: There should be more!
 BENCHMARKS = [
     # name, is_seq_output, output_type
     ('signalP_binary', False, 'binary'),
@@ -46,6 +45,9 @@ BENCHMARKS = [
     ('scop', False, 'categorical'),
     ('secondary_structure', True, 'categorical'),
     ('disorder_secondary_structure', True, 'categorical'),
+    ('phosphoserine', True, 'categorical'),
+    ('PhosphositePTM', True, 'categorical'),
+    ('ProFET_NP_SP_Cleaved', False, 'binary'),
 ]
 
 class ModelSpecification:
@@ -199,13 +201,15 @@ def preprocess_benchmark_dataset(train_set, valid_set, test_set, output_type, un
 
 def evaluate(y_pred, y_true, output_type, unique_labels):
 
-    from sklearn.metrics import r2_score, mean_absolute_error, roc_auc_score, log_loss, f1_score, precision_score, recall_score, matthews_corrcoef, \
-            classification_report, confusion_matrix
+    from scipy.stats import spearmanr
+    from sklearn.metrics import r2_score, mean_absolute_error, roc_auc_score, log_loss, accuracy_score, f1_score, precision_score, recall_score, \
+            matthews_corrcoef, classification_report, confusion_matrix
             
     if output_type.is_numeric:
         assert not output_type.is_seq
         log('R2: %.3f' % r2_score(y_true, y_pred))
         log('Mean absolute error: %.3f' % mean_absolute_error(y_true, y_pred))
+        log('Spearman\'s rank correlation: %.3f' % spearmanr(y_true, y_pred))
     else:
     
         if output_type.is_seq:
@@ -220,14 +224,24 @@ def evaluate(y_pred, y_true, output_type, unique_labels):
         spread_y_pred_classes = y_pred_classes.flatten()
         spread_y_pred = y_pred.reshape((y_pred.size // y_pred.shape[-1], y_pred.shape[-1]))
         
+        if output_type.is_seq:
+            spread_no_padding_mask = (spread_y_true != n_unique_labels - 1)
+        else:
+            spread_no_padding_mask = np.ones_like(spread_y_true, dtype = bool)
+            
+        spread_y_true_no_padding = spread_y_true[spread_no_padding_mask]
+        spread_y_pred_classes_no_padding = spread_y_pred_classes[spread_no_padding_mask]
+        spread_y_pred_no_padding = spread_y_pred[spread_no_padding_mask]
+        
         if output_type.is_binary:
             log('AUC: %.3f' % roc_auc_score(spread_y_true, spread_y_pred))
             log('MCC: %.3f' % matthews_corrcoef(spread_y_true, spread_y_pred_classes))
-        
-        log('Log loss: %.3f' % log_loss(spread_y_true, spread_y_pred, labels = unique_labels))
-        log('F1 (micro avg.): %.2f%%' % (100 * f1_score(spread_y_true, spread_y_pred_classes, average = 'micro')))
-        log('Precision (micro avg.): %.2f%%' % (100 * precision_score(spread_y_true, spread_y_pred_classes, average = 'micro')))
-        log('Recall (micro avg.): %.2f%%' % (100 * recall_score(spread_y_true, spread_y_pred_classes, average = 'micro')))   
+                
+        log('Log loss: %.2f%%' % (100 * log_loss(spread_y_true_no_padding, spread_y_pred_no_padding, labels = unique_labels)))
+        log('Accuracy: %.2f%%' % (100 * accuracy_score(spread_y_true_no_padding, spread_y_pred_classes_no_padding)))
+        log('F1 (micro avg.): %.2f%%' % (100 * f1_score(spread_y_true_no_padding, spread_y_pred_classes_no_padding, average = 'micro')))
+        log('Precision (micro avg.): %.2f%%' % (100 * precision_score(spread_y_true_no_padding, spread_y_pred_classes_no_padding, average = 'micro')))
+        log('Recall (micro avg.): %.2f%%' % (100 * recall_score(spread_y_true_no_padding, spread_y_pred_classes_no_padding, average = 'micro')))   
 
         log('Classification report:' + '\n' + str(classification_report(spread_y_true, spread_y_pred_classes, labels = np.arange(n_unique_labels), \
                 target_names = str_unique_labels)))
