@@ -24,7 +24,7 @@ BASELINE_SETTINGS = {
     'batch_size': 32,
     'initial_lr': 5e-05,
     'training_callbacks': [
-        keras.callbacks.ReduceLROnPlateau(patience = 1, factor = 0.35),
+        keras.callbacks.ReduceLROnPlateau(patience = 1, factor = 0.5),
         keras.callbacks.EarlyStopping(patience = 2),
     ],
     'max_epochs': 80,
@@ -45,33 +45,35 @@ BENCHMARKS = [
     ('scop', False, 'categorical'),
     ('secondary_structure', True, 'categorical'),
     ('disorder_secondary_structure', True, 'categorical'),
+    ('ProFET_NP_SP_Cleaved', False, 'binary'),
     ('phosphoserine', True, 'categorical'),
     ('PhosphositePTM', True, 'categorical'),
-    ('ProFET_NP_SP_Cleaved', False, 'binary'),
 ]
 
 class ModelSpecification:
     
-    def __init__(self, create_model_function, pretrained_model_weigths_file_path = None, create_model_kwargs = {}):
+    def __init__(self, create_model_function, model_weights = None, pretrained_model_weigths_file_path = None, create_model_kwargs = {}):
+        assert model_weights is None or pretrained_model_weigths_file_path is None, 'Please choose up to one way of specifying model weights.'
         self.create_model_function = create_model_function
+        self.model_weights = model_weights
         self.pretrained_model_weigths_file_path = pretrained_model_weigths_file_path
         self.create_model_kwargs = create_model_kwargs
         
     def create_model(self, seq_len):
+        
         import tensorflow.keras.backend as K
         K.clear_session()
-        return self.create_model_function(seq_len, n_tokens, N_ANNOTATIONS, **self.create_model_kwargs)
         
-    def create_and_load_model_weights(self, seq_len):
+        model = self.create_model_function(seq_len, n_tokens, N_ANNOTATIONS, **self.create_model_kwargs)
         
-        model = self.create_model(seq_len)
-        
-        if self.pretrained_model_weigths_file_path is not None:
+        if self.model_weights is not None:
+            model.set_weights(self.model_weights)
+        elif self.pretrained_model_weigths_file_path is not None:
             with open(self.pretrained_model_weigths_file_path, 'rb') as f:
                 model_weights, optimizer_weights = pickle.load(f)
                 model.set_weights(model_weights)
         
-        return model
+        return model        
 
 class OutputType:
     
@@ -209,7 +211,7 @@ def evaluate(y_pred, y_true, output_type, unique_labels):
         assert not output_type.is_seq
         log('R2: %.3f' % r2_score(y_true, y_pred))
         log('Mean absolute error: %.3f' % mean_absolute_error(y_true, y_pred))
-        log('Spearman\'s rank correlation: %.3f' % spearmanr(y_true, y_pred))
+        log('Spearman\'s rank correlation: %.3f' % spearmanr(y_true, y_pred)[0])
     else:
     
         if output_type.is_seq:
@@ -243,15 +245,17 @@ def evaluate(y_pred, y_true, output_type, unique_labels):
         log('Precision (micro avg.): %.2f%%' % (100 * precision_score(spread_y_true_no_padding, spread_y_pred_classes_no_padding, average = 'micro')))
         log('Recall (micro avg.): %.2f%%' % (100 * recall_score(spread_y_true_no_padding, spread_y_pred_classes_no_padding, average = 'micro')))   
 
-        log('Classification report:' + '\n' + str(classification_report(spread_y_true, spread_y_pred_classes, labels = np.arange(n_unique_labels), \
-                target_names = str_unique_labels)))
-        log('Confusion matrix:')
-        display(pd.DataFrame(confusion_matrix(spread_y_true, spread_y_pred_classes, labels = np.arange(n_unique_labels)), index = str_unique_labels, \
-                columns = str_unique_labels))
+        with pd.option_context('display.max_rows', 16, 'display.max_columns', 10):
+            log('Classification report:')
+            display(pd.DataFrame(classification_report(spread_y_true, spread_y_pred_classes, labels = np.arange(n_unique_labels), \
+                    target_names = str_unique_labels, output_dict = True)).transpose())
+            log('Confusion matrix:')
+            display(pd.DataFrame(confusion_matrix(spread_y_true, spread_y_pred_classes, labels = np.arange(n_unique_labels)), index = str_unique_labels, \
+                    columns = str_unique_labels))
         
 def build_fine_tuning_model(model_specification, settings, output_type, unique_labels):
 
-    model = model_specification.create_and_load_model_weights(settings['seq_len'])
+    model = model_specification.create_model(settings['seq_len'])
     input_seq_layer, input_annoatations_layer = model.input
     output_seq_layer, output_annoatations_layer = model.output
 
