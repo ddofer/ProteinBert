@@ -8,18 +8,14 @@ import h5py
 
 from tensorflow import keras
 
-import wandb
-from wandb.keras import WandbCallback
-
 from pwas.shared_utils.util import log
 
 from tokenization import ADDED_TOKENS_PER_SEQ, additional_token_to_index, n_tokens, tokenize_seq
 from model_util import get_model_creator, recreate_model_with_same_state, save_model_state, load_model_state
 
 H5_FILE_PATH = '/cs/phd/nadavb/cafa_project/data/dataset.h5'
-BASE_WEIGHTS_DIR = '/cs/phd/nadavb/cafa_project/data/model_weights'
 
-EPISODE_SETTINGS = [
+DEFAULT_EPISODE_SETTINGS = [
     # max_seq_len, batch_size
     (100, 128),
     (450, 64),
@@ -125,7 +121,8 @@ class EpisodeDataManager:
 class EpochGenerator:
     
     def __init__(self, batches_per_epoch = 100, p_seq_noise = 0.05, p_no_input_annot = 0.5, p_annot_noise_positive = 0.25, \
-            p_annot_noise_negative = 1e-04, load_chunk_size = 100000, min_time_per_episode = timedelta(minutes = 15)):
+            p_annot_noise_negative = 1e-04, load_chunk_size = 100000, min_time_per_episode = timedelta(minutes = 15), \
+            episode_settings = DEFAULT_EPISODE_SETTINGS):
         
         self.batches_per_epoch = batches_per_epoch
         self.p_seq_noise = p_seq_noise
@@ -136,7 +133,7 @@ class EpochGenerator:
         self.min_time_per_episode = min_time_per_episode
         
         self.episode_managers = [EpisodeDataManager(max_seq_len, batch_size, self.batches_per_epoch) for max_seq_len, batch_size in \
-                EPISODE_SETTINGS]
+                episode_settings]
         self.episode_max_seq_lens = np.array([episode_manager.max_seq_len for episode_manager in self.episode_managers])
         
     def setup(self, dataset_handler, starting_sample_index = 0):
@@ -265,13 +262,14 @@ class AutoSaveManager:
     
 class ModelTrainer:
     
-    def __init__(self, epoch_generator, autosave_manager, weights_dir, model_creator, lr = 2e-04, annots_loss_weight = 1e03):
+    def __init__(self, model_creator, epoch_generator, autosave_manager = None, weights_dir = None, lr = 2e-04, annots_loss_weight = 1e03, fit_callbacks = []):
+        self.model_creator = model_creator
         self.epoch_generator = epoch_generator
         self.autosave_manager = autosave_manager
         self.weights_dir = weights_dir
-        self.model_creator = model_creator
         self.lr = lr
         self.annots_loss_weight = annots_loss_weight
+        self.fit_callbacks = fit_callbacks
         
     def setup(self, dataset_handler, resume_epoch = None):
         
@@ -306,14 +304,14 @@ class ModelTrainer:
         
         X, Y, sample_weigths = self.epoch_generator.create_next_epoch()
         log('Epoch %d (current sample %d):' % (self.current_epoch_index, self.epoch_generator.current_sample_index))
-        self.model.fit(X, Y, sample_weight = sample_weigths, batch_size = episode.batch_size, callbacks = [WandbCallback()])
+        self.model.fit(X, Y, sample_weight = sample_weigths, batch_size = episode.batch_size, callbacks = self.fit_callbacks)
         
-        if autosave_if_needed:
+        if autosave_if_needed and self.autosave_manager is not None:
             self.autosave_manager.on_epoch_end(self.model, self.current_epoch_index, self.epoch_generator.current_sample_index)
             
         self.current_epoch_index += 1
         
-    def train(self, autosave = True, n_epochs = None):
+    def train(self, n_epochs = None, autosave = True):
         for _ in (itertools.count() if n_epochs is None else range(n_epochs)):
             self.train_next_epoch(autosave_if_needed = autosave)
             
@@ -342,20 +340,11 @@ class ModelTrainer:
         '''
         X, Y, sample_weigths = self.epoch_generator.create_dummpy_epoch(size = 1)
         model.fit(X, Y, batch_size = 1, verbose = 0)
-        
-def mkdir_if_not_exists(directory):
-    if not os.path.isdir(directory):
-        os.mkdir(directory)
-        
-def run_pretraining(create_model_function, resume_epoch = None, n_epochs = None, lr = 2e-04, annots_loss_weight = 1e03, model_creation_kwargs = {}, \
-        epoch_generator_kwargs = {}, auto_save_manager_kwargs = {}):
+
+def run_pretraining(create_model_function, epoch_generator, autosave_manager = None, weights_dir = None, resume_epoch = None, n_epochs = None, \
+        lr = 2e-04, annots_loss_weight = 1e03, fit_callbacks = [], model_creation_kwargs = {}):
 
     np.random.seed(0)
-    
-    run_weights_dir = os.path.join(BASE_WEIGHTS_DIR, wandb.run.name)
-    mkdir_if_not_exists(run_weights_dir)
-    auto_save_weights_dir = os.path.join(run_weights_dir, 'autosave')
-    mkdir_if_not_exists(auto_save_weights_dir)
     
     with h5py.File(H5_FILE_PATH, 'r') as h5f:
         included_annotation_indices = h5f['included_annotation_indices'][:]
@@ -364,11 +353,12 @@ def run_pretraining(create_model_function, resume_epoch = None, n_epochs = None,
     print('%d unique annotations.' % n_annotations)
     
     model_creator = get_model_creator(n_annotations, create_model_function, **model_creation_kwargs)
-    epoch_generator = EpochGenerator(**epoch_generator_kwargs)
-    autosave_manager = AutoSaveManager(auto_save_weights_dir, **auto_save_manager_kwargs)
-    model_trainer = ModelTrainer(epoch_generator, autosave_manager, run_weights_dir, model_creator, lr = lr, annots_loss_weight = annots_loss_weight)
+    model_trainer = ModelTrainer(model_creator, epoch_generator, autosave_manager = autosave_manager, weights_dir = weights_dir, lr = lr, \
+            annots_loss_weight = annots_loss_weight, fit_callbacks = fit_callbacks)
 
     with h5py.File(H5_FILE_PATH, 'r') as h5f:
         model_trainer.setup(DatasetHandler(h5f), resume_epoch = resume_epoch)
         model_trainer.train(n_epochs = n_epochs)
+        
+    return model_trainer
 
